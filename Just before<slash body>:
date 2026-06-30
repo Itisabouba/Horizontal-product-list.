@@ -1,0 +1,1 @@
+<script src="{{ 'best-sellers.js' | asset_url }}" defer></script>
