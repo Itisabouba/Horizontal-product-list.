@@ -1,0 +1,185 @@
+(function () {
+  'use strict';
+
+  const MODAL_ID = 'bs-quickview-modal';
+
+  /* ── Quick View ───────────────────────────────────────── */
+  const QuickView = {
+    _modal: null, _body: null, _close: null, _backdrop: null,
+    _prevFocus: null, _loading: false,
+    _reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+
+    init() {
+      this._modal    = document.getElementById(MODAL_ID);
+      if (!this._modal) return;
+      this._body     = document.getElementById('bs-qv-body');
+      this._close    = document.getElementById('bs-qv-close');
+      this._backdrop = document.getElementById('bs-qv-backdrop');
+      this._bindTriggers();
+      this._bindClose();
+      this._bindKeyboard();
+    },
+
+    _bindTriggers() {
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.bs-card__quickview');
+        if (!btn || btn.disabled) return;
+        e.preventDefault();
+        if (btn.dataset.productUrl) this._open(btn.dataset.productUrl);
+      });
+    },
+
+    _bindClose() {
+      this._close?.addEventListener('click', () => this._hide());
+      this._backdrop?.addEventListener('click', () => this._hide());
+    },
+
+    _bindKeyboard() {
+      document.addEventListener('keydown', (e) => {
+        if (!this._modal || this._modal.hidden) return;
+        if (e.key === 'Escape') { e.preventDefault(); this._hide(); return; }
+        if (e.key === 'Tab') this._trapFocus(e);
+      });
+    },
+
+    _trapFocus(e) {
+      const focusable = [...this._modal.querySelectorAll(
+        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )].filter(el => !el.closest('[hidden]'));
+      if (!focusable.length) { e.preventDefault(); return; }
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (e.shiftKey) { if (document.activeElement === first) { e.preventDefault(); last.focus(); } }
+      else            { if (document.activeElement === last)  { e.preventDefault(); first.focus(); } }
+    },
+
+    async _open(productUrl) {
+      if (this._loading) return;
+      this._loading = true;
+      this._prevFocus = document.activeElement;
+      this._showSpinner();
+      this._modal.removeAttribute('hidden');
+      document.body.style.overflow = 'hidden';
+      requestAnimationFrame(() => this._close?.focus());
+
+      try {
+        const res = await fetch(`${productUrl}?section_id=product`, {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const fragment = doc.querySelector('[id^="shopify-section"]') || doc.body;
+        if (this._body) {
+          this._body.innerHTML = '';
+          this._body.appendChild(document.adoptNode(fragment));
+          this._body.querySelectorAll('script').forEach(old => {
+            const s = document.createElement('script');
+            [...old.attributes].forEach(a => s.setAttribute(a.name, a.value));
+            s.textContent = old.textContent;
+            old.replaceWith(s);
+          });
+        }
+      } catch {
+        if (this._body) {
+          this._body.innerHTML = `
+            <div style="text-align:center;padding:32px 0;">
+              <p style="font-family:sans-serif;color:#555;margin-bottom:18px;">Unable to load preview.</p>
+              <a href="${productUrl}" style="font-family:sans-serif;font-size:13px;color:#1a1a1a;text-decoration:underline;">
+                View full product page →
+              </a>
+            </div>`;
+        }
+      } finally {
+        this._loading = false;
+      }
+    },
+
+    _hide() {
+      if (!this._modal) return;
+      this._modal.setAttribute('hidden', '');
+      document.body.style.overflow = '';
+      this._prevFocus?.focus();
+      setTimeout(() => { if (this._body) this._showSpinner(); }, this._reducedMotion ? 0 : 350);
+    },
+
+    _showSpinner() {
+      if (this._body) {
+        this._body.innerHTML = `<div class="bs-qv-spinner" aria-label="Loading"><span></span><span></span><span></span></div>`;
+      }
+    }
+  };
+
+  /* ── Showcase Video Autoplay (touch-friendly) ────────────
+     On hover-capable devices, CSS handles the opacity reveal.
+     On touch devices (no hover), we play/pause the showcase
+     video on intersection so it still functions as a preview
+     when the card scrolls into view, instead of staying dark. */
+  const ShowcaseVideo = {
+    init() {
+      const videos = document.querySelectorAll('.bs-card__showcase-video');
+      if (!videos.length) return;
+
+      const isTouch = window.matchMedia('(hover: none)').matches;
+      if (!isTouch) return; // desktop/hover devices rely on CSS + native controls only
+
+      if (!('IntersectionObserver' in window)) return;
+
+      const obs = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          const video = entry.target;
+          if (entry.isIntersecting) {
+            video.style.opacity = '1';
+            video.play?.().catch(() => {});
+          } else {
+            video.pause?.();
+          }
+        });
+      }, { threshold: 0.6 });
+
+      videos.forEach((video) => obs.observe(video));
+    }
+  };
+
+  /* ── Card Entrance Animation ──────────────────────────── */
+  const CardEntrance = {
+    init() {
+      if (!('IntersectionObserver' in window)) return;
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const cards = document.querySelectorAll('.bs-card');
+      if (!cards.length) return;
+      cards.forEach((card, i) => {
+        card.style.opacity   = '0';
+        card.style.transform = 'translateY(24px)';
+        card.style.transition = `opacity 550ms ease ${i * 90}ms, transform 550ms cubic-bezier(0.22, 1, 0.36, 1) ${i * 90}ms`;
+      });
+      const obs = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.style.opacity   = '1';
+            entry.target.style.transform = 'translateY(0)';
+            obs.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+      cards.forEach(card => obs.observe(card));
+    }
+  };
+
+  /* ── Boot ─────────────────────────────────────────────── */
+  function init() {
+    QuickView.init();
+    ShowcaseVideo.init();
+    CardEntrance.init();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  document.addEventListener('shopify:section:load', (e) => {
+    if (e.target.querySelector('.bs-section')) init();
+  });
+
+})();
