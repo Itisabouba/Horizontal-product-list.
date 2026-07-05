@@ -1,0 +1,216 @@
+{%- liquid
+  assign heading          = section.settings.heading
+  assign products         = section.settings.collection.products
+  assign product_limit    = section.settings.product_limit | default: 6
+  assign low_stock_thresh = section.settings.low_stock_threshold | plus: 0
+
+  # Detect duplicate showcase assignments (two blocks targeting the same
+  # product) so we can surface a visible admin-only warning instead of
+  # silently dropping the second block. Silent failures are not acceptable
+  # in a merchant-facing tool.
+  assign seen_showcase_ids = '' | split: ','
+  assign duplicate_showcase_ids = '' | split: ','
+  for block in section.blocks
+    if block.type == 'product_showcase' and block.settings.product != blank
+      if seen_showcase_ids contains block.settings.product.id
+        assign duplicate_showcase_ids = duplicate_showcase_ids | concat: block.settings.product.id
+      else
+        assign seen_showcase_ids = seen_showcase_ids | concat: block.settings.product.id
+      endif
+    endif
+  endfor
+-%}
+
+<section id="bs-{{ section.id }}" class="bs-section" style="--bs-bg:{{ section.settings.background_color }};--bs-heading-color:{{ section.settings.heading_color }};--bs-pt:{{ section.settings.padding_top }}px;--bs-pb:{{ section.settings.padding_bottom }}px;" aria-label="{{ heading | escape }}">
+  {%- if request.design_mode and duplicate_showcase_ids.size > 0 -%}
+    <div class="bs-admin-warning" role="alert">
+      <strong>⚠ Best Sellers — Showcase conflict:</strong>
+      More than one "Product Showcase" block is targeting the same product for {{ duplicate_showcase_ids.size }} product(s). Only the first matching block will apply — please remove the duplicate block in the theme editor.
+      <span class="bs-admin-warning__note">(This message is only visible to you in the theme editor — customers never see it.)</span>
+    </div>
+  {%- endif -%}
+  <div class="bs-container">
+    <header class="bs-header">
+      <h2 class="bs-heading">{{ heading | escape }}</h2>
+    </header>
+    <div class="bs-grid" role="list">
+      {%- if products != blank -%}
+        {%- for product in products limit: product_limit -%}
+          {%- liquid
+            assign pri  = product.featured_image
+            assign sec  = product.images[1]
+            assign has_compare = false
+            if product.compare_at_price > product.price
+              assign has_compare = true
+            endif
+            assign inv_qty  = product.selected_or_first_available_variant.inventory_quantity
+            assign inv_mgmt = product.selected_or_first_available_variant.inventory_management
+            assign show_low = false
+            if inv_mgmt == 'shopify' and inv_qty > 0 and inv_qty <= low_stock_thresh
+              assign show_low = true
+            endif
+            assign badge_meta = product.metafields.custom.badges.value
+
+            # Resolve a matching showcase block for this product, if any.
+            # If duplicates exist for this product, the admin warning banner
+            # above already surfaces that — here we deterministically take
+            # the first block in block order.
+            assign showcase_block = nil
+            for block in section.blocks
+              if block.type == 'product_showcase' and block.settings.product.id == product.id
+                assign showcase_block = block
+                break
+              endif
+            endfor
+
+            assign card_classes = 'bs-card'
+            if showcase_block and showcase_block.settings.display_mode == 'static'
+              assign card_classes = card_classes | append: ' bs-card--showcase-static'
+            endif
+          -%}
+          <article class="{{ card_classes }}" role="listitem" {% if showcase_block %}{{ showcase_block.shopify_attributes }}{% endif %}>
+            <a href="{{ product.url }}" class="bs-card__image-link" aria-label="{{ product.title | escape }}">
+              <div class="bs-card__image-wrap">
+                {%- if pri -%}{{ pri | image_url: width: 900 | image_tag: class: 'bs-card__img bs-card__img--primary', loading: 'lazy', widths: '400,600,800,900', sizes: '(max-width:767px) 90vw,(max-width:1024px) 48vw,33vw', alt: pri.alt | default: product.title }}{%- else -%}{{ 'product-1' | placeholder_svg_tag: 'bs-card__img bs-card__img--primary bs-card__img--placeholder' }}{%- endif -%}
+                {%- if sec -%}{{ sec | image_url: width: 900 | image_tag: class: 'bs-card__img bs-card__img--secondary', loading: 'lazy', widths: '400,600,800,900', sizes: '(max-width:767px) 90vw,(max-width:1024px) 48vw,33vw', alt: sec.alt | default: product.title }}{%- endif -%}
+
+                {%- if showcase_block -%}
+                  {%- liquid
+                    assign sc_image = showcase_block.settings.showcase_image
+                    assign sc_video = showcase_block.settings.showcase_video
+                    assign sc_alt   = showcase_block.settings.showcase_image_alt | default: sc_image.alt | default: product.title
+                  -%}
+                  {%- if sc_video -%}
+                    <video class="bs-card__showcase-video" muted loop playsinline preload="metadata" aria-hidden="true" poster="{{ sc_image | default: pri | image_url: width: 900 }}">
+                      <source src="{{ sc_video.sources.last.url }}" type="video/mp4">
+                    </video>
+                  {%- elsif sc_image -%}
+                    {{ sc_image | image_url: width: 900 | image_tag: class: 'bs-card__showcase', loading: 'lazy', widths: '400,600,800,900', sizes: '(max-width:767px) 90vw,(max-width:1024px) 48vw,33vw', alt: sc_alt }}
+                  {%- endif -%}
+                {%- endif -%}
+
+                <div class="bs-card__badges">
+                  {%- if badge_meta != blank -%}
+                    {%- for b in badge_meta -%}
+                      {%- liquid
+                        case b
+                          when 'hot_seller'      
+                            assign bl = 'Hot Seller'
+                            assign bm = 'hot'
+                          when 'restocked'       
+                            assign bl = 'Restocked'
+                            assign bm = 'restocked'
+                          when 'low_stock'       
+                            assign bl = 'Low Stock!'
+                            assign bm = 'low'
+                          when 'limited_edition' 
+                            assign bl = 'Limited Edition'
+                            assign bm = 'limited'
+                          when 'new_arrival'     
+                            assign bl = 'New Arrival'
+                            assign bm = 'new'
+                          when 'sale'            
+                            assign bl = 'Sale'
+                            assign bm = 'sale'
+                          else                   
+                            assign bl = b
+                            assign bm = 'default'
+                        endcase
+                      -%}
+                      <span class="bs-badge bs-badge--{{ bm }}">{{ bl }}</span>
+                    {%- endfor -%}
+                  {%- else -%}
+                    {%- if product.tags contains 'hot-seller' or product.tags contains 'hot_seller' -%}<span class="bs-badge bs-badge--hot">Hot Seller</span>{%- endif -%}
+                    {%- if product.tags contains 'restocked' -%}<span class="bs-badge bs-badge--restocked">Restocked</span>{%- endif -%}
+                    {%- if product.tags contains 'limited-edition' or product.tags contains 'limited_edition' -%}<span class="bs-badge bs-badge--limited">Limited Edition</span>{%- endif -%}
+                    {%- if product.tags contains 'new-arrival' or product.tags contains 'new_arrival' -%}<span class="bs-badge bs-badge--new">New Arrival</span>{%- endif -%}
+                    {%- if show_low -%}<span class="bs-badge bs-badge--low">Low Stock!</span>{%- endif -%}
+                  {%- endif -%}
+                </div>
+                <button type="button" class="bs-card__quickview" data-product-url="{{ product.url }}" aria-label="Quick view {{ product.title | escape }}"><svg class="bs-qv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>
+              </div>
+            </a>
+            <div class="bs-card__info">
+              <a href="{{ product.url }}" class="bs-card__title-link"><h3 class="bs-card__title">{{ product.title | escape }}</h3></a>
+              {%- if section.settings.show_vendor and product.vendor != blank -%}<p class="bs-card__vendor">{{ product.vendor | escape }}</p>{%- endif -%}
+              <div class="bs-card__price-row"><span class="bs-card__price">{{ product.price | money }}</span>{%- if has_compare -%}<s class="bs-card__compare-price">{{ product.compare_at_price | money }}</s>{%- endif -%}</div>
+              {%- if show_low -%}<p class="bs-card__low-stock">only {{ inv_qty }} left</p>{%- endif -%}
+            </div>
+          </article>
+        {%- endfor -%}
+      {%- else -%}
+        {%- for i in (1..3) -%}
+          <article class="bs-card bs-card--placeholder" role="listitem">
+            <div class="bs-card__image-link" aria-hidden="true">
+              <div class="bs-card__image-wrap">
+                {{ 'product-1' | placeholder_svg_tag: 'bs-card__img bs-card__img--primary bs-card__img--placeholder' }}
+                <div class="bs-card__badges"><span class="bs-badge bs-badge--hot">Hot Seller</span></div>
+                <button type="button" class="bs-card__quickview" disabled aria-label="Quick view"><svg class="bs-qv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>
+              </div>
+            </div>
+            <div class="bs-card__info">
+              <p class="bs-card__title">Product Title Placeholder</p>
+              <p class="bs-card__vendor">Brand Name</p>
+              <div class="bs-card__price-row"><span class="bs-card__price">$199.00</span></div>
+            </div>
+          </article>
+        {%- endfor -%}
+      {%- endif -%}
+    </div>
+  </div>
+</section>
+
+<div id="bs-quickview-modal" class="bs-qv-modal" role="dialog" aria-modal="true" hidden>
+  <div class="bs-qv-backdrop" id="bs-qv-backdrop"></div>
+  <div class="bs-qv-panel">
+    <button type="button" class="bs-qv-close" id="bs-qv-close" aria-label="Close quick view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <div class="bs-qv-body" id="bs-qv-body"><div class="bs-qv-spinner" aria-label="Loading"><span></span><span></span><span></span></div></div>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "Best Sellers",
+  "tag": "section",
+  "class": "bs-section-wrapper",
+  "settings": [
+    { "type": "header", "content": "Content" },
+    { "type": "text", "id": "heading", "label": "Heading", "default": "BEST SELLERS" },
+    { "type": "collection", "id": "collection", "label": "Collection" },
+    { "type": "range", "id": "product_limit", "label": "Number of Products", "min": 3, "max": 12, "step": 1, "default": 6 },
+    { "type": "checkbox", "id": "show_vendor", "label": "Show Vendor", "default": true },
+    { "type": "range", "id": "low_stock_threshold", "label": "Low Stock Threshold", "min": 1, "max": 20, "step": 1, "default": 5 },
+    { "type": "header", "content": "Colors" },
+    { "type": "color", "id": "background_color", "label": "Background", "default": "#FAF9F6" },
+    { "type": "color", "id": "heading_color", "label": "Heading Color", "default": "#1a1a1a" },
+    { "type": "header", "content": "Spacing" },
+    { "type": "range", "id": "padding_top", "label": "Padding Top", "min": 20, "max": 120, "step": 4, "default": 72 },
+    { "type": "range", "id": "padding_bottom", "label": "Padding Bottom", "min": 20, "max": 120, "step": 4, "default": 80 }
+  ],
+  "blocks": [
+    {
+      "type": "product_showcase",
+      "name": "Product Showcase",
+      "settings": [
+        { "type": "paragraph", "content": "Assign a custom editorial image or video to ONE product below. It overrides that product's default hover image — use it to show lifestyle, styled, or campaign imagery instead of a plain second product photo. Add one block per product you want to customize; the block list on the left won't show the product name, so check the preview after selecting a product to confirm which card updates." },
+        { "type": "product", "id": "product", "label": "Product to override" },
+        { "type": "image_picker", "id": "showcase_image", "label": "Showcase image", "info": "Used if no video is set, or as the video poster frame while it loads." },
+        { "type": "text", "id": "showcase_image_alt", "label": "Image alt text (optional)", "info": "Describe the image for accessibility and SEO. Falls back to the product title if left blank." },
+        { "type": "video", "id": "showcase_video", "label": "Showcase video (optional)", "info": "Takes priority over the image when set. Keep it short (3–8s), silent, and loop-friendly for best performance." },
+        {
+          "type": "select",
+          "id": "display_mode",
+          "label": "Display mode",
+          "options": [
+            { "value": "hover", "label": "Reveal on hover / autoplay" },
+            { "value": "static", "label": "Always visible" }
+          ],
+          "default": "hover",
+          "info": "Reveal on hover: desktop hover / mobile autoplay on scroll. Always visible: replaces product photos entirely — best for a single hero-style best seller you want to feel editorial rather than catalog-like."
+        }
+      ]
+    }
+  ],
+  "presets": [{ "name": "Best Sellers", "category": "Collection" }]
+}
+{% endschema %}
